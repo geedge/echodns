@@ -3,11 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"math/rand"
+	_ "math/rand"
 	"net"
 	"strconv"
 	"strings"
-	"time"
+	_ "time"
 
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog"
@@ -15,11 +15,19 @@ import (
 )
 
 var CONFIG_SLD string
+var UniqueCounter uint32 = 0xfffffffa
 
-func strategyMaker(name string, qtype uint16) uint16 {
-	subdomain := strings.ToLower(strings.Split(name, ".")[0])
+func strategyMaker(name string, qtype uint16) int8 {
+	var subdomain string
+	labels := strings.Split(name, ".")
+	if len(labels) >= 4 {
+		subdomain = strings.ToLower(labels[len(labels)-4])
+	}
+
 	if qtype == dns.TypeA {
-		if strings.Contains(subdomain, "fwd") {
+		if len(labels) == 4 && (subdomain == "ns1" || subdomain == "ns2") {
+			return 0
+		} else if strings.Contains(subdomain, "fwd") {
 			return 1 // return rdns ip in cname
 		} else if strings.Contains(subdomain, "rdns") {
 			return 2 // return honey cname record
@@ -29,9 +37,13 @@ func strategyMaker(name string, qtype uint16) uint16 {
 			return 4 // basic echodns
 		} else if strings.Contains(subdomain, "ttl") {
 			return 5 // ttl test
+		} else if strings.Contains(subdomain, "wrong-id") {
+			return 6 // return response with wrong txid
+		} else if strings.Contains(subdomain, "wrong-rec") {
+			return 7 // return response with wrong records
 		}
 	}
-	return 0
+	return -1
 }
 
 func InttoIPv4(n uint32) net.IP {
@@ -91,10 +103,11 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 		//fmt.Println(cname_fqdn)
 		m.Answer = append(m.Answer, cname)
 	case 3:
-		time_str := strconv.FormatInt(time.Now().UnixMicro(), 10)
-		time_int, _ := strconv.Atoi(time_str[5 : len(time_str)-2])
-		time_int += rand.Intn(10000)
-		timestamp := InttoIPv4(uint32(time_int))
+		//time_str := strconv.FormatInt(time.Now().UnixMicro(), 10)
+		//time_int, _ := strconv.Atoi(time_str[5 : len(time_str)-2])
+		//time_int += rand.Intn(10000)
+		UniqueCounter += 1
+		timestamp := InttoIPv4(uint32(UniqueCounter))
 		a := &dns.A{
 			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 14400},
 			A:   timestamp,
@@ -114,8 +127,27 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 			A:   ip,
 		}
 		m.Answer = append(m.Answer, a)
+	case 6:
+		m.MsgHdr.Id += 1
+		a := &dns.A{
+			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   ip,
+		}
+		m.Answer = append(m.Answer, a)
+	case 7:
+		wrong_answer := &dns.AAAA{
+			Hdr:  dns.RR_Header{Name: "www.example.com.", Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 60},
+			AAAA: net.ParseIP("fe80::7526:a2ae:a0b8:946d"),
+		}
+		m.Answer = append(m.Answer, wrong_answer)
 	case 0:
-		return
+		a := &dns.A{
+			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+			A:   net.ParseIP("159.75.200.247"),
+		}
+		m.Answer = append(m.Answer, a)
+	case -1:
+		m.MsgHdr.Rcode = dns.RcodeNameError
 	}
 	w.WriteMsg(m)
 }
