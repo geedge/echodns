@@ -41,6 +41,12 @@ func strategyMaker(name string, qtype uint16) int8 {
 			return 6 // return response with wrong txid
 		} else if strings.Contains(subdomain, "wrong-rec") {
 			return 7 // return response with wrong records
+		} else if strings.Contains(subdomain, "bailiwick") {
+			return 8 // bailiwick verification
+		} else if strings.Contains(subdomain, "cname-chain") {
+			return 9 // unlimited ns chain
+		} else if strings.Contains(subdomain, "ns-chain") {
+			return 10 // unlimited cname chain
 		}
 	}
 	return -1
@@ -78,6 +84,7 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	id = m.MsgHdr.Id
 	name = m.Question[0].Name
+	subdomain := strings.ToLower(strings.Split(name, ".")[0])
 	qtype = m.Question[0].Qtype
 	log.Log().Str("sip", ip.String()).Int64("port", int64(port)).Int64("id", int64(id)).Str("name", name).Int64("qtype", int64(qtype)).Msg("")
 	//log.Printf("%v|%v|%v|%v|%v", ip, port, id, name, qtype)
@@ -140,6 +147,49 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 			AAAA: net.ParseIP("fe80::7526:a2ae:a0b8:946d"),
 		}
 		m.Answer = append(m.Answer, wrong_answer)
+	case 8:
+		wrong_ns := &dns.NS{
+			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 60},
+			Ns:  dns.Fqdn("dns.baidu.com"),
+		}
+		wrong_ns_ip := &dns.A{
+			Hdr: dns.RR_Header{Name: "dns.baidu.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   net.ParseIP("159.75.200.247"),
+		}
+		m.Ns = append(m.Ns, wrong_ns)
+		m.Extra = append(m.Extra, wrong_ns_ip)
+	case 9:
+		cname_target := ""
+		labels := strings.Split(subdomain, "-")
+		if len(labels) == 2 {
+			cname_target = subdomain + "-0"
+		} else {
+			iter_cnt, _ := strconv.Atoi(labels[len(labels)-1])
+			iter_cnt += 1
+			cname_target = strings.Join([]string{labels[0], labels[1], strconv.Itoa(iter_cnt)}, "-")
+		}
+		cname_target = dns.Fqdn(cname_target + "." + CONFIG_SLD)
+		cname_redir := &dns.CNAME{
+			Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+			Target: cname_target,
+		}
+		m.Answer = append(m.Answer, cname_redir)
+	case 10:
+		ns_target := ""
+		labels := strings.Split(subdomain, "-")
+		if len(labels) == 2 {
+			ns_target = subdomain + "-0"
+		} else {
+			iter_cnt, _ := strconv.Atoi(labels[len(labels)-1])
+			iter_cnt += 1
+			ns_target = strings.Join([]string{labels[0], labels[1], strconv.Itoa(iter_cnt)}, "-")
+		}
+		ns_target = dns.Fqdn(ns_target + "." + CONFIG_SLD)
+		ns_delegation := &dns.NS{
+			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 60},
+			Ns:  ns_target,
+		}
+		m.Ns = append(m.Ns, ns_delegation)
 	case 0:
 		a := &dns.A{
 			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
