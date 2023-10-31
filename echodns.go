@@ -15,6 +15,7 @@ import (
 )
 
 var CONFIG_SLD string
+var CONFIG_NS string
 var UniqueCounter uint32 = 0xfffffffa
 
 func strategyMaker(name string, qtype uint16) int8 {
@@ -47,6 +48,8 @@ func strategyMaker(name string, qtype uint16) int8 {
 			return 9 // unlimited ns chain
 		} else if strings.Contains(subdomain, "ns-chain") {
 			return 10 // unlimited cname chain
+		} else if strings.Contains(subdomain, "attack") {
+			return 11
 		}
 	}
 	return -1
@@ -161,12 +164,14 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 	case 9:
 		cname_target := ""
 		labels := strings.Split(subdomain, "-")
-		if len(labels) == 2 {
+		if labels[len(labels)-1] == "chain" {
 			cname_target = subdomain + "-0"
 		} else {
 			iter_cnt, _ := strconv.Atoi(labels[len(labels)-1])
 			iter_cnt += 1
-			cname_target = strings.Join([]string{labels[0], labels[1], strconv.Itoa(iter_cnt)}, "-")
+			labels = append(labels[:len(labels)-1], strconv.Itoa(iter_cnt))
+			cname_target = strings.Join(labels, "-")
+			//cname_target = strings.Join([]string{labels[0], labels[1], strconv.Itoa(iter_cnt)}, "-")
 		}
 		cname_target = dns.Fqdn(cname_target + "." + CONFIG_SLD)
 		cname_redir := &dns.CNAME{
@@ -177,12 +182,14 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 	case 10:
 		ns_target := ""
 		labels := strings.Split(subdomain, "-")
-		if len(labels) == 2 {
+		if labels[len(labels)-1] == "chain" {
 			ns_target = subdomain + "-0"
 		} else {
 			iter_cnt, _ := strconv.Atoi(labels[len(labels)-1])
 			iter_cnt += 1
-			ns_target = strings.Join([]string{labels[0], labels[1], strconv.Itoa(iter_cnt)}, "-")
+			labels = append(labels[:len(labels)-1], strconv.Itoa(iter_cnt))
+			ns_target = strings.Join(labels, "-")
+			//ns_target = strings.Join([]string{labels[0], labels[1], strconv.Itoa(iter_cnt)}, "-")
 		}
 		ns_target = dns.Fqdn(ns_target + "." + CONFIG_SLD)
 		ns_delegation := &dns.NS{
@@ -190,10 +197,16 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 			Ns:  ns_target,
 		}
 		m.Ns = append(m.Ns, ns_delegation)
+	case 11:
+		ns_record := &dns.NS{
+			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 60},
+			Ns:  "shiyan7.jthmfgz.icu.",
+		}
+		m.Ns = append(m.Ns, ns_record)
 	case 0:
 		a := &dns.A{
 			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
-			A:   net.ParseIP("159.75.200.247"),
+			A:   net.ParseIP(CONFIG_NS),
 		}
 		m.Answer = append(m.Answer, a)
 	case -1:
@@ -203,6 +216,7 @@ func handleReflect(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func main() {
+	flag.StringVar(&CONFIG_NS, "ns", "159.75.200.247", "configure nameserver ip for echo dns zone")
 	flag.StringVar(&CONFIG_SLD, "sld", "", "configure sld for echo dns server")
 	flag.Parse()
 	if CONFIG_SLD == "" {
